@@ -52,6 +52,13 @@ extern "C"
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
     write(filedescriptor, data, *length);
-    return VM_STATUS_SUCCESS;
+    // if(success)
+    // {
+      return VM_STATUS_SUCCESS;
+    // }
+    // else
+    // {
+      // return VM_STATUS_FAILURE;
+    // }
   }
 }
