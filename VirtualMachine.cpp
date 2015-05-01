@@ -1,4 +1,5 @@
 #include "VirtualMachine.h"
+#include "Machine.h"
 
 #include "unistd.h"
 #include "errno.h"
@@ -13,16 +14,36 @@ extern "C"
   void VMUnloadModule(void);
   TVMStatus VMFilePrint(int filedescriptor, const char *format, ...);
   
-  //code goes here, implement these functions
+  
+  volatile int ticks = 0;
+  
+  void AlarmCallback (void *calldata)
+  {
+    ticks--;
+  }
+ 
   TVMStatus VMStart(int tickms, int machinetickms, int argc, char *argv[])
   {
     const char *module = argv[0];
-    TVMMainEntry func = VMLoadModule(module);
-    if (func == NULL)
+    if(machinetickms <= 0)
+    {
+      machinetickms = 10;
+    }
+    if(tickms <= 0)
+    {
+      tickms = 10;
+    }
+    
+    TVMMainEntry VMMain = VMLoadModule(module);
+    if (VMMain == NULL)
     {
       return VM_STATUS_FAILURE;
     }
-    func(argc, argv);
+
+    MachineInitialize(machinetickms);
+    MachineRequestAlarm(tickms * 1000, AlarmCallback, NULL);
+    MachineEnableSignals();
+    VMMain(argc, argv);
     return VM_STATUS_SUCCESS;
   }
 
@@ -32,7 +53,20 @@ extern "C"
   TVMStatus VMThreadTerminate(TVMThreadID thread);
   TVMStatus VMThreadID(TVMThreadIDRef threadref);
   TVMStatus VMThreadState(TVMThreadID thread, TVMThreadStateRef stateref);
-  TVMStatus VMThreadSleep(TVMTick tick);
+  
+  TVMStatus VMThreadSleep(TVMTick tick)
+  {
+    if(tick == VM_TIMEOUT_INFINITE)
+    {
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    ticks = tick;
+    while (ticks > 0)
+    {
+      
+    }
+    return VM_STATUS_SUCCESS;
+  }
 
   TVMStatus VMMutexCreate(TVMMutexIDRef mutexref);
   TVMStatus VMMutexDelete(TVMMutexID mutex);
