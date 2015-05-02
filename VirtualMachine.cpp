@@ -87,7 +87,7 @@ extern "C"
   
   void AlarmCallback (void *calldata)
   {
-    for(int i = 0; i < sleeping.size(); i++)
+    for(unsigned int i = 0; i < sleeping.size(); i++)
     {
       cout << "tick " << sleeping[i].t_ticks << '\n';
       sleeping[i].t_ticks--;
