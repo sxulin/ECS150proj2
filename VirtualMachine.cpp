@@ -113,11 +113,12 @@ extern "C"
     {
       tid = 1; 
     }
-    SMachineContext *oldctx = &allThreads[curID]->t_context;
-    SMachineContext *newctx = &allThreads[(int)tid]->t_context;
-    allThreads[(int)tid]->t_state = VM_THREAD_STATE_RUNNING;
+    TCB *oldThread, *newThread;
+    oldThread = allThreads[curID];
+    newThread = allThreads[(int)tid];
+    newThread->t_state = VM_THREAD_STATE_RUNNING;
     curID = tid;
-    MachineContextSwitch(oldctx, newctx);
+    MachineContextSwitch(&oldThread->t_context, &newThread->t_context);
   }
   
   void AlarmCallback (void *calldata)
@@ -146,6 +147,7 @@ extern "C"
   
   void idleFunc(void *)
   {
+    MachineEnableSignals();
     while (1);
   }
  
@@ -153,14 +155,6 @@ extern "C"
   {
     curID = 0;
     const char *module = argv[0];
-    if(machinetickms <= 0)
-    {
-      machinetickms = 10;
-    }
-    if(tickms <= 0)
-    {
-      tickms = 10;
-    }
     TCB *mainThread = (TCB*)malloc(sizeof(TCB));
     mainThread->t_id = 0;
     mainThread->t_prio = VM_THREAD_PRIORITY_NORMAL;
@@ -384,14 +378,12 @@ extern "C"
     {
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
-    MachineEnableSignals();
-    cout << "preping write\n";
     TCB *myThread = allThreads[curID];
     myThread->t_state = VM_THREAD_STATE_WAITING;
     unReady(myThread);
     MachineFileWrite(filedescriptor, data, *length, FileIOCallback, myThread);
-    *length = myThread->t_fileData;
     scheduler();
+    *length = myThread->t_fileData;
     if (length >= 0)
     {
       return VM_STATUS_SUCCESS;
