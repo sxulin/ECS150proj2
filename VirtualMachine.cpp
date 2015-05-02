@@ -90,23 +90,23 @@ extern "C"
   {
     for(unsigned int i = 0; i < sleeping.size(); i++)
     {
-      cout << "tick "<< sleeping[i]->t_ticks << '\n';
       sleeping[i]->t_ticks--;
       if(sleeping[i]->t_ticks == 0)
       {
         sleeping[i]->t_state = VM_THREAD_STATE_READY;
         setReady(sleeping[i]);
         sleeping.erase(sleeping.begin()+i);
-      }
-      scheduler();
+        scheduler();
+      }  
     }
   }
   
   void skeleton(void * param)
   {
     TCB* thread = (TCB*) param;
+    MachineEnableSignals();
     thread->t_entry(thread->param);
-    // VMThreadTerminate(thread->t_id);
+    VMThreadTerminate(thread->t_id);
   }
   
   void idleFunc(void *)
@@ -171,27 +171,120 @@ extern "C"
     return VM_STATUS_SUCCESS;
   }
   
-  TVMStatus VMThreadDelete(TVMThreadID thread);
-  
-  TVMStatus VMThreadActivate(TVMThreadID threadID)
+  TVMStatus VMThreadDelete(TVMThreadID thread)
   {
-    TCB *thread = allThreads[(int)threadID];
-    TMachineSignalStateRef sigstate = NULL;
-    MachineSuspendSignals(sigstate);
-    MachineContextCreate(&thread->t_context, skeleton, thread, thread->stk_ptr, thread->t_memsize);
-    thread->t_state = VM_THREAD_STATE_READY;
-    if(thread->t_state > allThreads[curID]->t_state)
+    if(thread < 0 || thread > allThreads.size())
     {
-      setReady(thread);
+      return VM_STATUS_ERROR_INVALID_ID;
+    }
+    TCB *myThread = allThreads[(int)thread];
+    if(myThread->t_state != VM_THREAD_STATE_DEAD)
+    {
+      return VM_STATUS_ERROR_INVALID_STATE;
+    }
+    allThreads.erase(allThreads.begin() + myThread->t_id);
+    allThreads.insert(allThreads.begin() + myThread->t_id, NULL); //fill removed spot with null so tid still corresponds to index in allThreads
+    return VM_STATUS_SUCCESS;
+  }
+  
+  TVMStatus VMThreadActivate(TVMThreadID thread)
+  {
+    TCB *myThread = allThreads[(int)thread];
+    TMachineSignalStateRef sigstate;
+    MachineSuspendSignals(sigstate);
+    MachineContextCreate(&myThread->t_context, skeleton, myThread, myThread->stk_ptr, myThread->t_memsize);
+    myThread->t_state = VM_THREAD_STATE_READY;
+    setReady(myThread);
+    if(myThread->t_state > allThreads[curID]->t_state)
+    {
       scheduler();
     }
     MachineResumeSignals(sigstate);
     return VM_STATUS_SUCCESS;
   }
   
-  TVMStatus VMThreadTerminate(TVMThreadID thread);
-  TVMStatus VMThreadID(TVMThreadIDRef threadref);
-  TVMStatus VMThreadState(TVMThreadID thread, TVMThreadStateRef stateref);
+  TVMStatus VMThreadTerminate(TVMThreadID thread)
+  {
+    if(thread < 0 || thread > allThreads.size())
+    {
+      return VM_STATUS_ERROR_INVALID_ID;
+    }
+    TCB *myThread = allThreads[(int)thread];
+    if(myThread->t_state == VM_THREAD_STATE_DEAD)
+    {
+      return VM_STATUS_ERROR_INVALID_STATE;
+    }
+    if(myThread->t_state == VM_THREAD_STATE_WAITING)
+    {
+      for(unsigned int i = 0; i < sleeping.size(); i++)
+      {
+        if (sleeping[i]->t_id == myThread->t_id)
+        {
+          sleeping.erase(sleeping.begin() + i);
+        }
+      }
+    }
+    else
+    {
+      switch(myThread->t_prio)
+      {
+        case VM_THREAD_PRIORITY_HIGH:
+          for(unsigned int i = 0; i < readyHigh.size(); i++)
+          {
+            if (readyHigh[i]->t_id == myThread->t_id)
+            {
+              readyHigh.erase(readyHigh.begin() + i);
+            }
+          }
+          break;
+        case VM_THREAD_PRIORITY_NORMAL:
+          for(unsigned int i = 0; i < readyMed.size(); i++)
+          {
+            if (readyMed[i]->t_id == myThread->t_id)
+            {
+              readyMed.erase(readyMed.begin() + i);
+            }
+          }
+          break;
+        case VM_THREAD_PRIORITY_LOW:
+          for(unsigned int i = 0; i < readyLow.size(); i++)
+          {
+            if (readyLow[i]->t_id == myThread->t_id)
+            {
+              readyLow.erase(readyLow.begin() + i);
+            }
+          }
+          break;
+      }
+    }
+    myThread->t_state = VM_THREAD_STATE_DEAD;
+    scheduler();
+    return VM_STATUS_SUCCESS;
+  }
+  
+  TVMStatus VMThreadID(TVMThreadIDRef threadref)
+  {
+    if(threadref == NULL)
+    {
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    *threadref = curID;
+    return VM_STATUS_SUCCESS;
+  }
+  
+  TVMStatus VMThreadState(TVMThreadID thread, TVMThreadStateRef stateref)
+  {
+    if(thread < 0 || thread > allThreads.size())
+    {
+      return VM_STATUS_ERROR_INVALID_ID;
+    }
+    if(stateref == NULL)
+    {
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    *stateref = allThreads[thread]->t_state;
+    return VM_STATUS_SUCCESS;
+  }
   
   TVMStatus VMThreadSleep(TVMTick tick)
   {
@@ -228,7 +321,7 @@ extern "C"
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
     write(filedescriptor, data, *length);
-    // if(success)
+    // if(some success test)
     // {
       return VM_STATUS_SUCCESS;
     // }
