@@ -1,6 +1,7 @@
 #include "VirtualMachine.h"
 #include "Machine.h"
 #include "vector"
+#include "stdlib.h"
 
 #include "unistd.h"
 #include "errno.h"
@@ -16,7 +17,7 @@ extern "C"
   TVMStatus VMFilePrint(int filedescriptor, const char *format, ...);
   
   
-  struct TCB
+  typedef struct TCB
   {
     TVMThreadID t_id;
     TVMThreadPriority t_prio;
@@ -30,18 +31,18 @@ extern "C"
     // Possibly need something to hold file return type
     // Possibly neew mutex id.
     // Possibly hold a list of held mutexes
-  }; // struct
+  } TCB; // struct
   
   int curID;
-  vector<TCB> allThreads;
-  vector<TCB> readyHigh;
-  vector<TCB> readyMed;
-  vector<TCB> readyLow;
-  vector<TCB> sleeping;
+  vector<TCB*> allThreads;
+  vector<TCB*> readyHigh;
+  vector<TCB*> readyMed;
+  vector<TCB*> readyLow;
+  vector<TCB*> sleeping;
   
-  void setReady(struct TCB thread)
+  void setReady(TCB* thread)
   {
-    TVMThreadPriority prio = thread.t_prio;
+    TVMThreadPriority prio = thread->t_prio;
     switch (prio)
     {
       case VM_THREAD_PRIORITY_HIGH:
@@ -61,44 +62,51 @@ extern "C"
     TVMThreadID tid;
     if(!readyHigh.empty())
     {
-      tid = readyHigh[0].t_id;
+      tid = readyHigh[0]->t_id;
       readyHigh.erase(readyHigh.begin());
     }
     else if (!readyMed.empty())
     {
-      tid = readyMed[0].t_id;
+      tid = readyMed[0]->t_id;
       readyMed.erase(readyMed.begin());
     }
     else if (!readyLow.empty())
     {
-      tid = readyLow[0].t_id;
+      tid = readyLow[0]->t_id;
       readyLow.erase(readyLow.begin());
     }
     else
     {
       tid = 1; 
     }
-    cout << "cur: " <<curID<<" new: "<<tid <<'\n';
-    SMachineContext oldctx = allThreads[curID].t_context;
-    SMachineContext newctx = allThreads[(int)tid].t_context;
+    SMachineContext *oldctx = &allThreads[curID]->t_context;
+    SMachineContext *newctx = &allThreads[(int)tid]->t_context;
+    allThreads[(int)tid]->t_state = VM_THREAD_STATE_RUNNING;
     curID = tid;
-    MachineContextSwitch(&oldctx, &newctx);
+    MachineContextSwitch(oldctx, newctx);
   }
   
   void AlarmCallback (void *calldata)
   {
     for(unsigned int i = 0; i < sleeping.size(); i++)
     {
-      cout << "tick " << sleeping[i].t_ticks << '\n';
-      sleeping[i].t_ticks--;
-      if(sleeping[i].t_ticks == 0)
+      cout << "tick "<< sleeping[i]->t_ticks << '\n';
+      sleeping[i]->t_ticks--;
+      if(sleeping[i]->t_ticks == 0)
       {
-        sleeping[i].t_state = VM_THREAD_STATE_READY;
+        sleeping[i]->t_state = VM_THREAD_STATE_READY;
         setReady(sleeping[i]);
         sleeping.erase(sleeping.begin()+i);
       }
       scheduler();
     }
+  }
+  
+  void skeleton(void * param)
+  {
+    TCB* thread = (TCB*) param;
+    thread->t_entry(thread->param);
+    // VMThreadTerminate(thread->t_id);
   }
   
   void idleFunc(void *)
@@ -118,10 +126,10 @@ extern "C"
     {
       tickms = 10;
     }
-    struct TCB mainThread;
-    mainThread.t_id = 0;
-    mainThread.t_prio = VM_THREAD_PRIORITY_NORMAL;
-    mainThread.t_state = VM_THREAD_STATE_READY;
+    TCB *mainThread = (TCB*)malloc(sizeof(TCB));
+    mainThread->t_id = 0;
+    mainThread->t_prio = VM_THREAD_PRIORITY_NORMAL;
+    mainThread->t_state = VM_THREAD_STATE_READY;
     allThreads.push_back(mainThread);
     
     TVMThreadID idleID;
@@ -147,17 +155,17 @@ extern "C"
     {
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
-    struct TCB newThread;
+    TCB *newThread = (TCB *)malloc(sizeof(TCB));
     TMachineSignalStateRef sigstate;
     MachineSuspendSignals(sigstate);
-    newThread.t_state = VM_THREAD_STATE_DEAD;
-    newThread.t_entry = entry;
-    newThread.param = param;
-    newThread.t_memsize = memsize;
-    newThread.stk_ptr = new uint8_t[memsize];
-    newThread.t_prio = prio;
+    newThread->t_state = VM_THREAD_STATE_DEAD;
+    newThread->t_entry = entry;
+    newThread->param = param;
+    newThread->t_memsize = memsize;
+    newThread->stk_ptr = new uint8_t[memsize];
+    newThread->t_prio = prio;
     *tid = allThreads.size();
-    newThread.t_id = *tid;
+    newThread->t_id = *tid;
     allThreads.push_back(newThread);
     MachineResumeSignals(sigstate);
     return VM_STATUS_SUCCESS;
@@ -165,16 +173,16 @@ extern "C"
   
   TVMStatus VMThreadDelete(TVMThreadID thread);
   
-  TVMStatus VMThreadActivate(TVMThreadID thread)
+  TVMStatus VMThreadActivate(TVMThreadID threadID)
   {
-    struct TCB newThread = allThreads[(int)thread];
-    TMachineSignalStateRef sigstate;
+    TCB *thread = allThreads[(int)threadID];
+    TMachineSignalStateRef sigstate = NULL;
     MachineSuspendSignals(sigstate);
-    MachineContextCreate(&newThread.t_context, newThread.t_entry, newThread.param, newThread.stk_ptr, newThread.t_memsize);
-    newThread.t_state = VM_THREAD_STATE_READY;
-    if(newThread.t_state > allThreads[curID].t_state)
+    MachineContextCreate(&thread->t_context, skeleton, thread, thread->stk_ptr, thread->t_memsize);
+    thread->t_state = VM_THREAD_STATE_READY;
+    if(thread->t_state > allThreads[curID]->t_state)
     {
-      setReady(newThread);
+      setReady(thread);
       scheduler();
     }
     MachineResumeSignals(sigstate);
@@ -195,8 +203,8 @@ extern "C"
     {
       //TODO something....
     }
-    allThreads[curID].t_ticks = tick;
-    allThreads[curID].t_state = VM_THREAD_STATE_WAITING;
+    allThreads[curID]->t_ticks = tick;
+    allThreads[curID]->t_state = VM_THREAD_STATE_WAITING;
     sleeping.push_back(allThreads[curID]);
     scheduler();
     return VM_STATUS_SUCCESS;
