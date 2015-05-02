@@ -28,7 +28,7 @@ extern "C"
     void *param;
     SMachineContext t_context;
     TVMTick t_ticks;
-    // Possibly need something to hold file return type
+    int t_fileData;
     // Possibly neew mutex id.
     // Possibly hold a list of held mutexes
   } TCB; // struct
@@ -55,6 +55,40 @@ extern "C"
         readyLow.push_back(thread);
         break;
     }
+  }
+  
+  void unReady(TCB* myThread)
+  {
+    switch(myThread->t_prio)
+      {
+        case VM_THREAD_PRIORITY_HIGH:
+          for(unsigned int i = 0; i < readyHigh.size(); i++)
+          {
+            if (readyHigh[i]->t_id == myThread->t_id)
+            {
+              readyHigh.erase(readyHigh.begin() + i);
+            }
+          }
+          break;
+        case VM_THREAD_PRIORITY_NORMAL:
+          for(unsigned int i = 0; i < readyMed.size(); i++)
+          {
+            if (readyMed[i]->t_id == myThread->t_id)
+            {
+              readyMed.erase(readyMed.begin() + i);
+            }
+          }
+          break;
+        case VM_THREAD_PRIORITY_LOW:
+          for(unsigned int i = 0; i < readyLow.size(); i++)
+          {
+            if (readyLow[i]->t_id == myThread->t_id)
+            {
+              readyLow.erase(readyLow.begin() + i);
+            }
+          }
+          break;
+      }
   }
   
   void scheduler()
@@ -90,6 +124,7 @@ extern "C"
   {
     for(unsigned int i = 0; i < sleeping.size(); i++)
     {
+      cout << "tick " << sleeping[i]->t_ticks << '\n';
       sleeping[i]->t_ticks--;
       if(sleeping[i]->t_ticks == 0)
       {
@@ -226,36 +261,7 @@ extern "C"
     }
     else
     {
-      switch(myThread->t_prio)
-      {
-        case VM_THREAD_PRIORITY_HIGH:
-          for(unsigned int i = 0; i < readyHigh.size(); i++)
-          {
-            if (readyHigh[i]->t_id == myThread->t_id)
-            {
-              readyHigh.erase(readyHigh.begin() + i);
-            }
-          }
-          break;
-        case VM_THREAD_PRIORITY_NORMAL:
-          for(unsigned int i = 0; i < readyMed.size(); i++)
-          {
-            if (readyMed[i]->t_id == myThread->t_id)
-            {
-              readyMed.erase(readyMed.begin() + i);
-            }
-          }
-          break;
-        case VM_THREAD_PRIORITY_LOW:
-          for(unsigned int i = 0; i < readyLow.size(); i++)
-          {
-            if (readyLow[i]->t_id == myThread->t_id)
-            {
-              readyLow.erase(readyLow.begin() + i);
-            }
-          }
-          break;
-      }
+      unReady(myThread);
     }
     myThread->t_state = VM_THREAD_STATE_DEAD;
     scheduler();
@@ -294,12 +300,17 @@ extern "C"
     } 
     else if (tick == VM_TIMEOUT_IMMEDIATE)
     {
-      //TODO something....
+      allThreads[curID]->t_state = VM_THREAD_STATE_READY;
+      setReady(allThreads[curID]);
+      scheduler();
     }
+    else
+    {
     allThreads[curID]->t_ticks = tick;
     allThreads[curID]->t_state = VM_THREAD_STATE_WAITING;
     sleeping.push_back(allThreads[curID]);
     scheduler();
+    }
     return VM_STATUS_SUCCESS;
   }
 
@@ -309,25 +320,104 @@ extern "C"
   TVMStatus VMMutexAcquire(TVMMutexID mutex, TVMTick timeout);     
   TVMStatus VMMutexRelease(TVMMutexID mutex);
   
-  TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescriptor);
-  TVMStatus VMFileClose(int filedescriptor);      
-  TVMStatus VMFileRead(int filedescriptor, void *data, int *length);
+  void FileIOCallback(void *calldata, int result)
+  {
+    TCB* myThread = (TCB*) calldata;
+    myThread->t_fileData = result;
+    myThread->t_state = VM_THREAD_STATE_READY;
+    setReady(myThread);
+    scheduler();
+  }
   
-  //TODO convert to using MachineFileWrite
+  TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescriptor)
+  {
+    if(filename == NULL || filedescriptor == NULL)
+    {
+      return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    TCB *myThread = allThreads[curID];
+    myThread->t_state = VM_THREAD_STATE_WAITING;
+    unReady(myThread);
+    MachineFileOpen(filename, flags, mode, FileIOCallback, myThread);
+    scheduler();
+    *filedescriptor = myThread->t_fileData;
+    return VM_STATUS_SUCCESS;
+  }
+  
+  TVMStatus VMFileClose(int filedescriptor)
+  {
+    TCB *myThread = allThreads[curID];
+    myThread->t_state = VM_THREAD_STATE_WAITING;
+    unReady(myThread);
+    MachineFileClose(filedescriptor, FileIOCallback, myThread);
+    scheduler();
+    if(myThread->t_fileData < 0)
+    {
+      return VM_STATUS_SUCCESS;
+    }
+    else
+    {
+      return VM_STATUS_FAILURE;
+    }  
+  } 
+  TVMStatus VMFileRead(int filedescriptor, void *data, int *length)
+  {
+    TCB *myThread = allThreads[curID];
+    myThread->t_state = VM_THREAD_STATE_WAITING;
+    unReady(myThread);
+    MachineFileRead(filedescriptor, data, *length, FileIOCallback, myThread);
+    scheduler();
+    *length = myThread->t_fileData;
+    if (length >= 0)
+    {
+      return VM_STATUS_SUCCESS;
+    }
+    else
+    {
+      return VM_STATUS_FAILURE;
+    }
+  }
+  
   TVMStatus VMFileWrite(int filedescriptor, void *data, int *length)
   {
     if (data == NULL || length == NULL)
     {
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
-    write(filedescriptor, data, *length);
-    // if(some success test)
-    // {
+    MachineEnableSignals();
+    cout << "preping write\n";
+    TCB *myThread = allThreads[curID];
+    myThread->t_state = VM_THREAD_STATE_WAITING;
+    unReady(myThread);
+    MachineFileWrite(filedescriptor, data, *length, FileIOCallback, myThread);
+    *length = myThread->t_fileData;
+    scheduler();
+    if (length >= 0)
+    {
       return VM_STATUS_SUCCESS;
-    // }
-    // else
-    // {
-      // return VM_STATUS_FAILURE;
-    // }
+    }
+    else
+    {
+      return VM_STATUS_FAILURE;
+    }
+  }
+  
+  TVMStatus VMFileSeek(int filedescriptor, int offset, int whence, int *newoffset)
+  {
+    
+    TCB *myThread = allThreads[curID];
+    myThread->t_state = VM_THREAD_STATE_WAITING;
+    unReady(myThread);
+    MachineFileSeek(filedescriptor,offset, whence, FileIOCallback, myThread);
+    scheduler();
+    if (newoffset != NULL)
+    {
+      *newoffset = myThread->t_fileData;
+      return VM_STATUS_SUCCESS;
+    }
+    else
+    {
+      return VM_STATUS_FAILURE;
+    }
   }
 }
