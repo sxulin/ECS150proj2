@@ -34,6 +34,7 @@ extern "C"
   } TCB; // struct
   
   int curID;
+  TMachineSignalState sigstate;
   vector<TCB*> allThreads;
   vector<TCB*> readyHigh;
   vector<TCB*> readyMed;
@@ -136,6 +137,22 @@ extern "C"
     }
   }
   
+  void FileIOCallback(void *calldata, int result)
+  {
+    TCB* myThread = (TCB*) calldata;
+    myThread->t_fileData = result;
+    myThread->t_state = VM_THREAD_STATE_READY;
+    setReady(myThread);
+    scheduler();
+  }
+  
+  void threadWait(TCB* myThread)
+  {
+    myThread->t_state = VM_THREAD_STATE_WAITING;
+    unReady(myThread);
+    scheduler();
+  }
+  
   void skeleton(void * param)
   {
     TCB* thread = (TCB*) param;
@@ -179,13 +196,13 @@ extern "C"
 
   TVMStatus VMThreadCreate(TVMThreadEntry entry, void *param, TVMMemorySize memsize, TVMThreadPriority prio, TVMThreadIDRef tid)
   {
+    MachineSuspendSignals(&sigstate);
     if(entry == NULL || tid == NULL)
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
     TCB *newThread = (TCB *)malloc(sizeof(TCB));
-    TMachineSignalStateRef sigstate;
-    MachineSuspendSignals(sigstate);
     newThread->t_state = VM_THREAD_STATE_DEAD;
     newThread->t_entry = entry;
     newThread->param = param;
@@ -195,31 +212,34 @@ extern "C"
     *tid = allThreads.size();
     newThread->t_id = *tid;
     allThreads.push_back(newThread);
-    MachineResumeSignals(sigstate);
+    MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
   
   TVMStatus VMThreadDelete(TVMThreadID thread)
   {
+    MachineSuspendSignals(&sigstate);
     if(thread < 0 || thread > allThreads.size())
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_ID;
     }
     TCB *myThread = allThreads[(int)thread];
     if(myThread->t_state != VM_THREAD_STATE_DEAD)
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_STATE;
     }
     allThreads.erase(allThreads.begin() + myThread->t_id);
     allThreads.insert(allThreads.begin() + myThread->t_id, NULL); //fill removed spot with null so tid still corresponds to index in allThreads
+    MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
   
   TVMStatus VMThreadActivate(TVMThreadID thread)
   {
+    MachineSuspendSignals(&sigstate);
     TCB *myThread = allThreads[(int)thread];
-    TMachineSignalStateRef sigstate;
-    MachineSuspendSignals(sigstate);
     MachineContextCreate(&myThread->t_context, skeleton, myThread, myThread->stk_ptr, myThread->t_memsize);
     myThread->t_state = VM_THREAD_STATE_READY;
     setReady(myThread);
@@ -227,19 +247,22 @@ extern "C"
     {
       scheduler();
     }
-    MachineResumeSignals(sigstate);
+    MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
   
   TVMStatus VMThreadTerminate(TVMThreadID thread)
   {
+    MachineSuspendSignals(&sigstate);
     if(thread < 0 || thread > allThreads.size())
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_ID;
     }
     TCB *myThread = allThreads[(int)thread];
     if(myThread->t_state == VM_THREAD_STATE_DEAD)
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_STATE;
     }
     if(myThread->t_state == VM_THREAD_STATE_WAITING)
@@ -258,37 +281,47 @@ extern "C"
     }
     myThread->t_state = VM_THREAD_STATE_DEAD;
     scheduler();
+    MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
   
   TVMStatus VMThreadID(TVMThreadIDRef threadref)
   {
+    MachineSuspendSignals(&sigstate);
     if(threadref == NULL)
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
     *threadref = curID;
+    MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
   
   TVMStatus VMThreadState(TVMThreadID thread, TVMThreadStateRef stateref)
   {
+    MachineSuspendSignals(&sigstate);
     if(thread < 0 || thread > allThreads.size())
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_ID;
     }
     if(stateref == NULL)
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
     *stateref = allThreads[thread]->t_state;
+    MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
   
   TVMStatus VMThreadSleep(TVMTick tick)
   {
+    MachineSuspendSignals(&sigstate);
     if(tick == VM_TIMEOUT_INFINITE)
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     } 
     else if (tick == VM_TIMEOUT_IMMEDIATE)
@@ -304,6 +337,7 @@ extern "C"
     sleeping.push_back(allThreads[curID]);
     scheduler();
     }
+    MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
 
@@ -313,37 +347,29 @@ extern "C"
   TVMStatus VMMutexAcquire(TVMMutexID mutex, TVMTick timeout);     
   TVMStatus VMMutexRelease(TVMMutexID mutex);
   
-  void FileIOCallback(void *calldata, int result)
-  {
-    TCB* myThread = (TCB*) calldata;
-    myThread->t_fileData = result;
-    myThread->t_state = VM_THREAD_STATE_READY;
-    setReady(myThread);
-    scheduler();
-  }
-  
   TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescriptor)
   {
+    MachineSuspendSignals(&sigstate);
     if(filename == NULL || filedescriptor == NULL)
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
     TCB *myThread = allThreads[curID];
-    myThread->t_state = VM_THREAD_STATE_WAITING;
-    unReady(myThread);
     MachineFileOpen(filename, flags, mode, FileIOCallback, myThread);
-    scheduler();
+    threadWait(myThread);
     *filedescriptor = myThread->t_fileData;
+    MachineResumeSignals(&sigstate);
     return VM_STATUS_SUCCESS;
   }
   
   TVMStatus VMFileClose(int filedescriptor)
   {
+    MachineSuspendSignals(&sigstate);
     TCB *myThread = allThreads[curID];
-    myThread->t_state = VM_THREAD_STATE_WAITING;
-    unReady(myThread);
     MachineFileClose(filedescriptor, FileIOCallback, myThread);
-    scheduler();
+    threadWait(myThread);
+    MachineResumeSignals(&sigstate);
     if(myThread->t_fileData < 0)
     {
       return VM_STATUS_SUCCESS;
@@ -353,14 +379,15 @@ extern "C"
       return VM_STATUS_FAILURE;
     }  
   } 
+  
   TVMStatus VMFileRead(int filedescriptor, void *data, int *length)
   {
+    MachineSuspendSignals(&sigstate);
     TCB *myThread = allThreads[curID];
-    myThread->t_state = VM_THREAD_STATE_WAITING;
-    unReady(myThread);
     MachineFileRead(filedescriptor, data, *length, FileIOCallback, myThread);
-    scheduler();
+    threadWait(myThread);
     *length = myThread->t_fileData;
+    MachineResumeSignals(&sigstate);
     if (length >= 0)
     {
       return VM_STATUS_SUCCESS;
@@ -377,12 +404,12 @@ extern "C"
     {
       return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
+    MachineSuspendSignals(&sigstate);
     TCB *myThread = allThreads[curID];
-    myThread->t_state = VM_THREAD_STATE_WAITING;
-    unReady(myThread);
     MachineFileWrite(filedescriptor, data, *length, FileIOCallback, myThread);
-    scheduler();
+    threadWait(myThread);
     *length = myThread->t_fileData;
+    MachineResumeSignals(&sigstate);
     if (length >= 0)
     {
       return VM_STATUS_SUCCESS;
@@ -395,12 +422,11 @@ extern "C"
   
   TVMStatus VMFileSeek(int filedescriptor, int offset, int whence, int *newoffset)
   {
-    
+    MachineSuspendSignals(&sigstate);
     TCB *myThread = allThreads[curID];
-    myThread->t_state = VM_THREAD_STATE_WAITING;
-    unReady(myThread);
     MachineFileSeek(filedescriptor,offset, whence, FileIOCallback, myThread);
-    scheduler();
+    threadWait(myThread);
+    MachineResumeSignals(&sigstate);
     if (newoffset != NULL)
     {
       *newoffset = myThread->t_fileData;
