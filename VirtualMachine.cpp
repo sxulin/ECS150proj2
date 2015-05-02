@@ -125,7 +125,6 @@ extern "C"
   {
     for(unsigned int i = 0; i < sleeping.size(); i++)
     {
-      cout << "tick " << sleeping[i]->t_ticks << '\n';
       sleeping[i]->t_ticks--;
       if(sleeping[i]->t_ticks == 0)
       {
@@ -224,7 +223,7 @@ extern "C"
     MachineContextCreate(&myThread->t_context, skeleton, myThread, myThread->stk_ptr, myThread->t_memsize);
     myThread->t_state = VM_THREAD_STATE_READY;
     setReady(myThread);
-    if(myThread->t_state > allThreads[curID]->t_state)
+    if(myThread->t_prio > allThreads[curID]->t_prio)
     {
       scheduler();
     }
