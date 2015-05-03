@@ -135,6 +135,10 @@ extern "C"
         scheduler();
       }  
     }
+    TCB *curThread = allThreads[curID];
+    curThread->t_state = VM_THREAD_STATE_READY;
+    setReady(curThread);
+    scheduler();
   }
   
   void FileIOCallback(void *calldata, int result)
@@ -369,13 +373,14 @@ extern "C"
     TCB *myThread = allThreads[curID];
     MachineFileClose(filedescriptor, FileIOCallback, myThread);
     threadWait(myThread);
-    MachineResumeSignals(&sigstate);
     if(myThread->t_fileData < 0)
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_SUCCESS;
     }
     else
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_FAILURE;
     }  
   } 
@@ -387,13 +392,14 @@ extern "C"
     MachineFileRead(filedescriptor, data, *length, FileIOCallback, myThread);
     threadWait(myThread);
     *length = myThread->t_fileData;
-    MachineResumeSignals(&sigstate);
     if (length >= 0)
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_SUCCESS;
     }
     else
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_FAILURE;
     }
   }
@@ -409,13 +415,14 @@ extern "C"
     MachineFileWrite(filedescriptor, data, *length, FileIOCallback, myThread);
     threadWait(myThread);
     *length = myThread->t_fileData;
-    MachineResumeSignals(&sigstate);
     if (length >= 0)
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_SUCCESS;
     }
     else
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_FAILURE;
     }
   }
@@ -426,14 +433,15 @@ extern "C"
     TCB *myThread = allThreads[curID];
     MachineFileSeek(filedescriptor,offset, whence, FileIOCallback, myThread);
     threadWait(myThread);
-    MachineResumeSignals(&sigstate);
     if (newoffset != NULL)
     {
       *newoffset = myThread->t_fileData;
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_SUCCESS;
     }
     else
     {
+      MachineResumeSignals(&sigstate);
       return VM_STATUS_FAILURE;
     }
   }

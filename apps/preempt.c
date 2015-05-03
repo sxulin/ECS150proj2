@@ -1,16 +1,20 @@
 #include "VirtualMachine.h"
 
+#include "stdio.h"
+
 #ifndef NULL
 #define NULL    ((void *)0)
 #endif
 
 void VMThread(void *param){
+  printf ("%s \n", "in entry");
     volatile int Index, Val = 0;
     VMPrint("VMThread Alive\nVMThread Starting\n");
-    for(Index = 0; Index < 1000000000; Index++){
+    for(Index = 0; Index < 1000; Index++){
         Val++;
     }
     VMPrint("VMThread Done\n");
+    printf ("%s \n", "leaving entry");
 }
 
 void VMMain(int argc, char *argv[]){
@@ -41,6 +45,7 @@ void VMMain(int argc, char *argv[]){
     VMPrint("VMMain Done\nWaiting\n");
     do{
         VMThreadState(VMThreadID, &VMState);
+        // printf ("%s \n", "stuck here");
     }while(VM_THREAD_STATE_DEAD != VMState);
     VMPrint("Goodbye\n");
 }
